@@ -13,7 +13,6 @@ from scipy.constants import epsilon_0
 import xobjects as xo
 from xobjects.general import Print
 from xobjects import BypassLinked
-from xtrack.prebuild_kernels import XT_PREBUILT_KERNELS_LOCATION
 
 from .constants import PROTON_MASS_EV
 
@@ -37,6 +36,7 @@ class Particles(xo.HybridClass):
     scalar_vars = (
         (xo.Float64, 'q0'),
         (xo.Float64, 'mass0'),
+        (xo.Float64, 't_sim'),
     )
 
     part_energy_vars = (
@@ -63,6 +63,8 @@ class Particles(xo.HybridClass):
             (xo.Float64, 'chi'),
             (xo.Float64, 'charge_ratio'),
             (xo.Float64, 'weight'),
+            (xo.Float64, 'ax'),
+            (xo.Float64, 'ay'),
             (xo.Int64, 'pdg_id'),
             (xo.Int64, 'particle_id'),
             (xo.Int64, 'at_element'),
@@ -193,7 +195,8 @@ class Particles(xo.HybridClass):
             Identifier of the last element through which the particle has been
         parent_particle_id : array_like of int, optional
             Identifier of the parent particle (secondary production processes)
-
+        t_sim : float, optional
+            Simulation frame time (typically one revolution period)
         """
         if '_xobject' in kwargs.keys():
             # Initialize xobject
@@ -293,6 +296,7 @@ class Particles(xo.HybridClass):
         # Init scalar vars
         self.q0 = kwargs.get('q0', 1.0)
         self.mass0 = kwargs.get('mass0', PROTON_MASS_EV)
+        self.t_sim = kwargs.get('t_sim', 0)
         self.start_tracking_at_element = kwargs.get(
                             'start_tracking_at_element', -1)
 
@@ -363,7 +367,7 @@ class Particles(xo.HybridClass):
         if isinstance(self._context, xo.ContextCpu) and not _no_reorganize:
             self.reorganize()
 
- 
+
     @classmethod
     def from_dict(cls, dct, load_rng_state=True, **kwargs):
 
@@ -487,7 +491,7 @@ class Particles(xo.HybridClass):
         return dct
 
     @classmethod
-    def from_pandas(cls, df, _context=None, _buffer=None, _offset=None):
+    def from_pandas(cls, df, _context=None, _buffer=None, _offset=None, load_rng_state=True, **kwargs):
 
         """
         Create a new Particles object from a pandas DataFrame.
@@ -513,7 +517,9 @@ class Particles(xo.HybridClass):
         for tt, nn in cls.scalar_vars + cls.size_vars:
             if nn in dct.keys() and not np.isscalar(dct[nn]):
                 dct[nn] = dct[nn][0]
-        return cls(**dct, _context=_context, _buffer=_buffer, _offset=_offset)
+        return cls.from_dict(dct, load_rng_state=load_rng_state,
+                             _context=_context, _buffer=_buffer,
+                             _offset=_offset, **kwargs)
 
     def to_pandas(self,
                   remove_underscored=None,
@@ -922,6 +928,8 @@ class Particles(xo.HybridClass):
             raise NotImplementedError("Out of space, need to regenerate xobject")
 
         for tt, nn in self.scalar_vars:
+            if nn == 't_sim':
+                continue
             assert np.isclose(getattr(self, nn), getattr(part, nn),
                               rtol=1e-14, atol=1e-14)
 
@@ -999,16 +1007,23 @@ class Particles(xo.HybridClass):
         """
         context = self._buffer.context
         if context.allow_prebuilt_kernels:
-            from xtrack.prebuild_kernels import get_suitable_kernel
             _print_state = Print.suppress
             Print.suppress = True
-            kernel_info = get_suitable_kernel({}, (self.__class__._XoStruct,))
+            try:
+                from xsuite import (
+                    get_suitable_kernel,
+                    XSK_PREBUILT_KERNELS_LOCATION,
+                )
+                kernel_info = get_suitable_kernel({}, ())
+            except ImportError:
+                kernel_info = None
+
             Print.suppress = _print_state
             if kernel_info:
                 module_name, _ = kernel_info
                 kernels = context.kernels_from_file(
                     module_name=module_name,
-                    containing_dir=XT_PREBUILT_KERNELS_LOCATION,
+                    containing_dir=XSK_PREBUILT_KERNELS_LOCATION,
                     kernel_descriptions=self._kernels,
                 )
                 context.kernels.update(kernels)
@@ -1291,6 +1306,47 @@ class Particles(xo.HybridClass):
         pzeta = self.ptau / self.beta0
         return self._buffer.context.linked_array_type.from_array(
             pzeta, mode='readonly',
+            container=self)
+
+    @property
+    def kin_px(self):
+        out = self.px - self.ax
+        return self._buffer.context.linked_array_type.from_array(
+            out,
+            mode='readonly',
+            container=self)
+
+    @property
+    def kin_py(self):
+        out = self.py - self.ay
+        return self._buffer.context.linked_array_type.from_array(
+            out,
+            mode='readonly',
+            container=self)
+
+    @property
+    def kin_ps(self):
+        sqrt = self._context.nplike_lib.sqrt
+        out = sqrt((1 + self.delta) ** 2 - self.kin_px ** 2 - self.kin_py ** 2)
+        return self._buffer.context.linked_array_type.from_array(
+            out,
+            mode='readonly',
+            container=self)
+
+    @property
+    def kin_xprime(self):
+        out = self.kin_px / self.kin_ps
+        return self._buffer.context.linked_array_type.from_array(
+            out,
+            mode='readonly',
+            container=self)
+
+    @property
+    def kin_yprime(self):
+        out = self.kin_py / self.kin_ps
+        return self._buffer.context.linked_array_type.from_array(
+            out,
+            mode='readonly',
             container=self)
 
     def add_to_energy(self, delta_energy):
@@ -1840,6 +1896,8 @@ class Particles(xo.HybridClass):
         self.y = kwargs.get('y', 0)
         self.px = kwargs.get('px', 0)
         self.py = kwargs.get('py', 0)
+        self.ax = kwargs.get('ax', 0)
+        self.ay = kwargs.get('ay', 0)
 
         pdg_id = kwargs.get('pdg_id')
         try:

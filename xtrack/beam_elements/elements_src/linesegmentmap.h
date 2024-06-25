@@ -87,19 +87,42 @@ void add_dispersion(
 }
 
 /*gpufun*/
-void transverse_motion(LocalParticle *part0,
-    double const qx, double const qy,
-    double const dqx, double const dqy,
-    double const det_xx, double const det_xy, double const det_yx, double const det_yy,
-    double const alfx_0, double const betx_0, double const alfy_0, double const bety_0,
-    double const alfx_1, double const betx_1, double const alfy_1, double const bety_1){
+void transverse_motion(LocalParticle *part0, LineSegmentMapData el){
+
+    double const qx = LineSegmentMapData_get_qx(el);
+    double const qy = LineSegmentMapData_get_qy(el);
+    double const det_xx = LineSegmentMapData_get_det_xx(el);
+    double const det_xy = LineSegmentMapData_get_det_xy(el);
+    double const det_yx = LineSegmentMapData_get_det_yx(el);
+    double const det_yy = LineSegmentMapData_get_det_yy(el);
+    double const alfx_0 = LineSegmentMapData_get_alfx(el, 0);
+    double const betx_0 = LineSegmentMapData_get_betx(el, 0);
+    double const alfy_0 = LineSegmentMapData_get_alfy(el, 0);
+    double const bety_0 = LineSegmentMapData_get_bety(el, 0);
+    double const alfx_1 = LineSegmentMapData_get_alfx(el, 1);
+    double const betx_1 = LineSegmentMapData_get_betx(el, 1);
+    double const alfy_1 = LineSegmentMapData_get_alfy(el, 1);
+    double const bety_1 = LineSegmentMapData_get_bety(el, 1);
+    int64_t const ndqx = LineSegmentMapData_len_coeffs_dqx(el);
+    int64_t const ndqy = LineSegmentMapData_len_coeffs_dqy(el);
 
     int64_t detuning;
     double sin_x = 0;
     double cos_x = 0;
     double sin_y = 0;
     double cos_y = 0;
-    if (dqx != 0.0 || dqy != 0.0 ||
+
+    int64_t any_chroma = 0;
+
+    for (int i_dqx=0; i_dqx<ndqx; i_dqx++){
+        any_chroma = LineSegmentMapData_get_coeffs_dqx(el, 0) != 0;
+    }
+
+    for (int i_dqy=0; i_dqy<ndqy; i_dqy++){
+        any_chroma = LineSegmentMapData_get_coeffs_dqy(el, 0) != 0;
+    }
+
+    if (any_chroma ||
         det_xx != 0.0 || det_xy != 0.0 || det_yx != 0.0 || det_yy != 0.0){
         detuning = 1;
     }
@@ -134,12 +157,18 @@ void transverse_motion(LocalParticle *part0,
                     * LocalParticle_get_y(part)*LocalParticle_get_py(part)
                 + bety_0
                     * LocalParticle_get_py(part)*LocalParticle_get_py(part));
-            double phase = 2*PI*(qx + dqx * LocalParticle_get_delta(part)
-                                +det_xx * J_x + det_xy * J_y);
+            double phase = 2*PI*(qx + det_xx * J_x + det_xy * J_y);
+            for (int i_dqx=1; i_dqx<ndqx; i_dqx++){
+                phase += 2*PI*(LineSegmentMapData_get_coeffs_dqx(el, i_dqx) *
+                               pow(LocalParticle_get_delta(part), (double)i_dqx));
+            }
             cos_x = cos(phase);
             sin_x = sin(phase);
-            phase = 2*PI*(qy + dqy * LocalParticle_get_delta(part)
-                            +det_yx * J_x + det_yy * J_y);
+            phase = 2*PI*(qy + det_yx * J_x + det_yy * J_y);
+            for (int i_dqy=1; i_dqy<ndqy; i_dqy++){
+                phase += 2*PI*(LineSegmentMapData_get_coeffs_dqy(el, i_dqy) *
+                               pow(LocalParticle_get_delta(part), (double)i_dqy));
+            }
             cos_y = cos(phase);
             sin_y = sin(phase);
         }
@@ -274,18 +303,49 @@ void longitudinal_motion(LocalParticle *part0,
 
 /*gpufun*/
 void uncorrelated_radiation_damping(LocalParticle *part0,
-            double const damping_factor_x, double const damping_factor_y,
-            double const damping_factor_s){
+            LineSegmentMapData el){
 
     //start_per_particle_block (part0->part)
-        LocalParticle_scale_x(part,damping_factor_x);
-        LocalParticle_scale_px(part,damping_factor_x);
-        LocalParticle_scale_y(part,damping_factor_y);
-        LocalParticle_scale_py(part,damping_factor_y);
-        LocalParticle_scale_zeta(part,damping_factor_s);
-        double delta = LocalParticle_get_delta(part);
-        delta *= damping_factor_s;
-        LocalParticle_update_delta(part,delta);
+        LocalParticle_set_x(part,
+            LineSegmentMapData_get_damping_factors(el,0,0)*LocalParticle_get_x(part));
+        LocalParticle_set_px(part,
+            LineSegmentMapData_get_damping_factors(el,1,1)*LocalParticle_get_px(part));
+        LocalParticle_set_y(part,
+            LineSegmentMapData_get_damping_factors(el,2,2)*LocalParticle_get_y(part));
+        LocalParticle_set_py(part,
+            LineSegmentMapData_get_damping_factors(el,3,3)*LocalParticle_get_py(part));
+        LocalParticle_set_zeta(part,
+            LineSegmentMapData_get_damping_factors(el,4,4)*LocalParticle_get_zeta(part));
+        LocalParticle_update_pzeta(part,
+            LineSegmentMapData_get_damping_factors(el,5,5)*LocalParticle_get_pzeta(part));
+    //end_per_particle_block
+}
+
+/*gpufun*/
+void correlated_radiation_damping(LocalParticle *part0,
+            LineSegmentMapData el){
+
+    //start_per_particle_block (part0->part)
+        double in[6];
+        in[0] = LocalParticle_get_x(part);
+        in[1] = LocalParticle_get_px(part);
+        in[2] = LocalParticle_get_y(part);
+        in[3] = LocalParticle_get_py(part);
+        in[4] = LocalParticle_get_zeta(part);
+        in[5] = LocalParticle_get_pzeta(part);
+        double out[6];
+        for(unsigned int i=0;i<6;++i){
+            out[i] = 0;
+            for(unsigned int j=0;j<6;++j){
+                out[i] += LineSegmentMapData_get_damping_factors(el,i,j)*in[j];
+            }
+        }
+        LocalParticle_set_x(part, out[0]);
+        LocalParticle_set_px(part, out[1]);
+        LocalParticle_set_y(part, out[2]);
+        LocalParticle_set_py(part, out[3]);
+        LocalParticle_set_zeta(part, out[4]);
+        LocalParticle_update_pzeta(part,out[5]);
     //end_per_particle_block
 }
 
@@ -326,30 +386,56 @@ void energy_and_reference_increments(LocalParticle *part0,
 
 /*gpufun*/
 void uncorrelated_gaussian_noise(LocalParticle *part0,
-                    double const gauss_noise_ampl_x,
-                    double const gauss_noise_ampl_px,
-                    double const gauss_noise_ampl_y,
-                    double const gauss_noise_ampl_py,
-                    double const gauss_noise_ampl_zeta,
-                    double const gauss_noise_ampl_delta){
+                    LineSegmentMapData el){
 
         //start_per_particle_block (part0->part)
             double r = RandomNormal_generate(part);
-            LocalParticle_add_to_x(part,r*gauss_noise_ampl_x);
+            LocalParticle_add_to_x(part,
+                r*LineSegmentMapData_get_gauss_noise_matrix(el,0,0));
             r = RandomNormal_generate(part);
-            LocalParticle_add_to_px(part,r*gauss_noise_ampl_px);
+            LocalParticle_add_to_px(part,
+                r*LineSegmentMapData_get_gauss_noise_matrix(el,1,1));
             r = RandomNormal_generate(part);
-            LocalParticle_add_to_y(part,r*gauss_noise_ampl_y);
+            LocalParticle_add_to_y(part,
+                r*LineSegmentMapData_get_gauss_noise_matrix(el,2,2));
             r = RandomNormal_generate(part);
-            LocalParticle_add_to_py(part,r*gauss_noise_ampl_py);
+            LocalParticle_add_to_py(part,
+                r*LineSegmentMapData_get_gauss_noise_matrix(el,3,3));
             r = RandomNormal_generate(part);
-            LocalParticle_add_to_zeta(part,r*gauss_noise_ampl_zeta);
+            LocalParticle_add_to_zeta(part,
+                r*LineSegmentMapData_get_gauss_noise_matrix(el,4,4));
             r = RandomNormal_generate(part);
-            double delta = LocalParticle_get_delta(part);
-            delta += r*gauss_noise_ampl_delta;
-            LocalParticle_update_delta(part,delta);
+            double pzeta = LocalParticle_get_pzeta(part);
+            pzeta += r*LineSegmentMapData_get_gauss_noise_matrix(el,5,5);
+            LocalParticle_update_pzeta(part,pzeta);
         //end_per_particle_block
 
+}
+
+/*gpufun*/
+void correlated_gaussian_noise(LocalParticle *part0,
+                    LineSegmentMapData el){
+
+        //start_per_particle_block (part0->part)
+            double x[6];
+            double r[6];
+            for(unsigned int i=0;i<6;++i){
+                x[i] = RandomNormal_generate(part);
+                r[i] = 0.0;
+            }
+            for(unsigned int i=0;i<6;++i){
+                for(unsigned int j=0;j<6;++j){
+                    r[i] += LineSegmentMapData_get_gauss_noise_matrix(el,i,j)*x[j];
+                }
+            }
+            LocalParticle_add_to_x(part,r[0]);
+            LocalParticle_add_to_px(part,r[1]);
+            LocalParticle_add_to_y(part,r[2]);
+            LocalParticle_add_to_py(part,r[3]);
+            LocalParticle_add_to_zeta(part,r[4]);
+            double pzeta = LocalParticle_get_pzeta(part);
+            LocalParticle_update_pzeta(part,pzeta+r[5]);
+        //end_per_particle_block
 }
 
 /*gpufun*/
@@ -367,23 +453,7 @@ void LineSegmentMap_track_local_particle(LineSegmentMapData el, LocalParticle* p
         LineSegmentMapData_get_dy(el, 0),
         LineSegmentMapData_get_dpy(el, 0));
 
-    transverse_motion(part0,
-        LineSegmentMapData_get_qx(el),
-        LineSegmentMapData_get_qy(el),
-        LineSegmentMapData_get_dqx(el),
-        LineSegmentMapData_get_dqy(el),
-        LineSegmentMapData_get_det_xx(el),
-        LineSegmentMapData_get_det_xy(el),
-        LineSegmentMapData_get_det_yx(el),
-        LineSegmentMapData_get_det_yy(el),
-        LineSegmentMapData_get_alfx(el, 0),
-        LineSegmentMapData_get_betx(el, 0),
-        LineSegmentMapData_get_alfy(el, 0),
-        LineSegmentMapData_get_bety(el, 0),
-        LineSegmentMapData_get_alfx(el, 1),
-        LineSegmentMapData_get_betx(el, 1),
-        LineSegmentMapData_get_alfy(el, 1),
-        LineSegmentMapData_get_bety(el, 1));
+    transverse_motion(part0, el);
 
     longitudinal_motion(part0, el);
 
@@ -392,21 +462,21 @@ void LineSegmentMap_track_local_particle(LineSegmentMapData el, LocalParticle* p
         LineSegmentMapData_get_energy_ref_increment(el));
 
     if (LineSegmentMapData_get_uncorrelated_rad_damping(el) == 1){
-        uncorrelated_radiation_damping(part0,
-            LineSegmentMapData_get_damping_factor_x(el),
-            LineSegmentMapData_get_damping_factor_y(el),
-            LineSegmentMapData_get_damping_factor_s(el));
+        uncorrelated_radiation_damping(part0,el);
+    }
+    
+    if (LineSegmentMapData_get_correlated_rad_damping(el) == 1){
+        correlated_radiation_damping(part0,el);
     }
 
     if (LineSegmentMapData_get_uncorrelated_gauss_noise(el) == 1){
-        uncorrelated_gaussian_noise(part0,
-            LineSegmentMapData_get_gauss_noise_ampl_x(el),
-            LineSegmentMapData_get_gauss_noise_ampl_px(el),
-            LineSegmentMapData_get_gauss_noise_ampl_y(el),
-            LineSegmentMapData_get_gauss_noise_ampl_py(el),
-            LineSegmentMapData_get_gauss_noise_ampl_zeta(el),
-            LineSegmentMapData_get_gauss_noise_ampl_delta(el));
+        uncorrelated_gaussian_noise(part0,el);
     }
+    
+    if (LineSegmentMapData_get_correlated_gauss_noise(el) == 1){
+        correlated_gaussian_noise(part0,el);
+    }
+
 
     add_dispersion(part0,
         LineSegmentMapData_get_dx(el, 1),
