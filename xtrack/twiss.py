@@ -232,7 +232,7 @@ def twiss_line(line, particle_ref=None, method=None,
             - momentum_compaction_factor: momentum compaction factor (slip_factor + 1/gamma_0^2)
             - T_rev0: reference revolution period in seconds
             - circumference: reference trajectory length in meters
-            - partice_on_co: particle on closed orbit
+            - particle_on_co: particle on closed orbit
             - R_matrix: R matrix (if calculated or provided)
             - eneloss_turn, energy loss per turn in electron volts (if
               eneloss_and_damping is True)
@@ -291,7 +291,6 @@ def twiss_line(line, particle_ref=None, method=None,
             used for the propagation of the W matrix.
 
     """
-
     input_kwargs = locals().copy()
 
     # defaults
@@ -983,7 +982,8 @@ def _twiss_open(line, init,
             / ((line.record_last_track.delta[6, i_start:i_stop+1] - delta_co).T
             - (line.record_last_track.delta[12, i_start:i_stop+1] - delta_co).T))
 
-    dzeta = dzeta - dzeta[0]
+    dzeta -= dzeta[0]
+    dzeta = np.array(dzeta)
 
     name_co = np.array(line.element_names[i_start:i_stop] + ('_end_point',))
 
